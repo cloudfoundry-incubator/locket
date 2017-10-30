@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 
 	"code.cloudfoundry.org/bbs/db/sqldb/helpers"
 	"code.cloudfoundry.org/lager"
@@ -244,4 +245,8 @@ func (db *SQLDB) fetchLock(logger lager.Logger, q helpers.Queryable, key string)
 		Type:     lockType,
 		TypeCode: models.GetTypeCode(lockType),
 	}, index, id, ttl, nil
+}
+
+func (db *SQLDB) CompareAndRelease(logger lager.Logger, lock *Lock) (bool, error) {
+	return false, errors.New("OH NOOOOOO")
 }

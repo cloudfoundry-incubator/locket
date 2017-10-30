@@ -538,6 +538,38 @@ var _ = Describe("Lock", func() {
 		})
 	})
 
+	Context("CompareAndRelease", func() {
+		Context("when the modified id has changed", func() {
+			It("does not release the lock", func() {
+			})
+		})
+
+		Context("when the modified index has changed", func() {
+			It("does not release the lock", func() {
+			})
+		})
+
+		Context("when the modified id and modified index are the same", func() {
+			It("releases the lock", func() {
+			})
+		})
+
+		Context("when fetching the lock fails", func() {
+			It("returns an error", func() {
+			})
+		})
+
+		Context("when releasing the lock fails", func() {
+			It("returns an error", func() {
+			})
+		})
+
+		Context("when the owner is different", func() {
+			It("does not release the lock", func() {
+			})
+		})
+	})
+
 	Context("Count", func() {
 		BeforeEach(func() {
 			query := helpers.RebindForFlavor(
