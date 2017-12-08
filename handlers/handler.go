@@ -5,6 +5,7 @@ import (
 	"code.cloudfoundry.org/lager"
 	"code.cloudfoundry.org/locket/db"
 	"code.cloudfoundry.org/locket/expiration"
+	"code.cloudfoundry.org/locket/metrics"
 	"code.cloudfoundry.org/locket/models"
 	"golang.org/x/net/context"
 )
@@ -15,14 +16,16 @@ type locketHandler struct {
 	db       db.LockDB
 	exitCh   chan<- struct{}
 	lockPick expiration.LockPick
+	metrics  metrics.RequestMetrics
 }
 
-func NewLocketHandler(logger lager.Logger, db db.LockDB, lockPick expiration.LockPick, exitCh chan<- struct{}) *locketHandler {
+func NewLocketHandler(logger lager.Logger, db db.LockDB, lockPick expiration.LockPick, requestMetrics metrics.RequestMetrics, exitCh chan<- struct{}) *locketHandler {
 	return &locketHandler{
 		logger:   logger,
 		db:       db,
 		lockPick: lockPick,
 		exitCh:   exitCh,
+		metrics:  requestMetrics,
 	}
 }
 
@@ -43,6 +46,10 @@ func (h *locketHandler) Lock(ctx context.Context, req *models.LockRequest) (*mod
 	logger := h.logger.Session("lock")
 	logger.Debug("started")
 	defer logger.Debug("complete")
+
+	h.metrics.IncrementRequestsStartedCounter(1)
+	// h.metrics.IncrementRequestsInFlightCounter(1)
+	// defer h.metrics.DecrementRequestsInFlightCounter(1)
 
 	err := validate(req)
 	if err != nil {
@@ -79,6 +86,8 @@ func (h *locketHandler) Lock(ctx context.Context, req *models.LockRequest) (*mod
 	}
 
 	h.lockPick.RegisterTTL(logger, lock)
+
+	h.metrics.IncrementRequestsSucceededCounter(1)
 
 	return &models.LockResponse{}, nil
 }

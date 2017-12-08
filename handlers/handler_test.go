@@ -10,6 +10,7 @@ import (
 	"code.cloudfoundry.org/locket/db/dbfakes"
 	"code.cloudfoundry.org/locket/expiration/expirationfakes"
 	"code.cloudfoundry.org/locket/handlers"
+	"code.cloudfoundry.org/locket/metrics/metricsfakes"
 	"code.cloudfoundry.org/locket/models"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -18,17 +19,20 @@ import (
 
 var _ = Describe("Lock", func() {
 	var (
-		fakeLockDB    *dbfakes.FakeLockDB
-		fakeLockPick  *expirationfakes.FakeLockPick
-		logger        *lagertest.TestLogger
-		locketHandler models.LocketServer
-		resource      *models.Resource
-		exitCh        chan struct{}
+		fakeLockDB         *dbfakes.FakeLockDB
+		fakeLockPick       *expirationfakes.FakeLockPick
+		logger             *lagertest.TestLogger
+		locketHandler      models.LocketServer
+		resource           *models.Resource
+		exitCh             chan struct{}
+		fakeRequestMetrics *metricsfakes.FakeRequestMetrics
 	)
 
 	BeforeEach(func() {
 		fakeLockDB = &dbfakes.FakeLockDB{}
 		fakeLockPick = &expirationfakes.FakeLockPick{}
+		fakeRequestMetrics = &metricsfakes.FakeRequestMetrics{}
+
 		logger = lagertest.NewTestLogger("locket-handler")
 		exitCh = make(chan struct{}, 1)
 
@@ -39,7 +43,13 @@ var _ = Describe("Lock", func() {
 			Type:  "lock",
 		}
 
-		locketHandler = handlers.NewLocketHandler(logger, fakeLockDB, fakeLockPick, exitCh)
+		locketHandler = handlers.NewLocketHandler(
+			logger,
+			fakeLockDB,
+			fakeLockPick,
+			fakeRequestMetrics,
+			exitCh,
+		)
 	})
 
 	Context("Lock", func() {
@@ -66,12 +76,28 @@ var _ = Describe("Lock", func() {
 		It("reserves the lock in the database", func() {
 			_, err := locketHandler.Lock(context.Background(), request)
 			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeLockDB.LockCallCount()).To(Equal(1))
 
-			Expect(fakeLockDB.LockCallCount()).Should(Equal(1))
 			_, actualResource, ttl := fakeLockDB.LockArgsForCall(0)
 			Expect(actualResource).To(Equal(resource))
 			Expect(ttl).To(BeEquivalentTo(10))
+
+			Expect(fakeRequestMetrics.IncrementRequestsStartedCounterCallCount()).To(Equal(1))
+			Expect(fakeRequestMetrics.IncrementRequestsSucceededCounterCallCount()).To(Equal(1))
+			Expect(fakeRequestMetrics.IncrementRequestsFailedCounterCallCount()).To(Equal(0))
+			Expect(fakeRequestMetrics.IncrementRequestsInFlightCounterCallCount()).To(Equal(1))
 		})
+
+		// Context("when a lock request is in flight", func() {
+		// 	var inFlight chan time.Duration
+		// 	BeforeEach(func() {
+
+		// 		fakeLockDB.LockStub = func(logger lager.Logger, resource *models.Resource, ttl int64) (*Lock, error) {
+
+		// 			return expectedLock, nil
+		// 		}
+		// 	})
+		// })
 
 		It("registers the lock and ttl with the lock pick", func() {
 			_, err := locketHandler.Lock(context.Background(), request)
