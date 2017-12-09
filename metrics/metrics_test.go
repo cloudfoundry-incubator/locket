@@ -7,6 +7,7 @@ import (
 	"code.cloudfoundry.org/bbs/db/sqldb/helpers/helpersfakes"
 	"code.cloudfoundry.org/clock/fakeclock"
 	mfakes "code.cloudfoundry.org/diego-logging-client/testhelpers"
+	loggregator "code.cloudfoundry.org/go-loggregator"
 	"code.cloudfoundry.org/lager"
 	"code.cloudfoundry.org/lager/lagertest"
 	"code.cloudfoundry.org/locket/metrics"
@@ -59,13 +60,13 @@ var _ = Describe("Metrics", func() {
 			}
 		}
 
-		fakeMetronClient.SendMetricStub = func(name string, value int) error {
+		fakeMetronClient.SendMetricStub = func(name string, value int, opts ...loggregator.EmitGaugeOption) error {
 			defer GinkgoRecover()
 
 			Eventually(metricsChan).Should(BeSent(FakeGauge{name, value}))
 			return nil
 		}
-		fakeMetronClient.SendDurationStub = func(name string, value time.Duration) error {
+		fakeMetronClient.SendDurationStub = func(name string, value time.Duration, opts ...loggregator.EmitGaugeOption) error {
 			defer GinkgoRecover()
 
 			Eventually(metricsChan).Should(BeSent(FakeGauge{name, int(value)}))

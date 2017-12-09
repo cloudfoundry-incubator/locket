@@ -5,18 +5,23 @@ import (
 
 	"code.cloudfoundry.org/clock/fakeclock"
 	mfakes "code.cloudfoundry.org/diego-logging-client/testhelpers"
+	loggregator "code.cloudfoundry.org/go-loggregator"
+	"code.cloudfoundry.org/go-loggregator/rpc/loggregator_v2"
 	"code.cloudfoundry.org/lager/lagertest"
 	"code.cloudfoundry.org/locket/metrics"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/gstruct"
+	"github.com/onsi/gomega/types"
 	"github.com/tedsuo/ifrit"
 	"github.com/tedsuo/ifrit/ginkgomon"
 )
 
 var _ = Describe("RequestMetrics", func() {
-	type FakeGauge struct {
+	type metric struct {
 		Name  string
-		Value int
+		Value interface{}
+		Opts  []loggregator.EmitGaugeOption
 	}
 
 	var (
@@ -26,29 +31,24 @@ var _ = Describe("RequestMetrics", func() {
 		logger           *lagertest.TestLogger
 		fakeClock        *fakeclock.FakeClock
 		metricsInterval  time.Duration
-		metricsChan      chan FakeGauge
+		metricsChan      chan metric
 	)
 
-	metricsChan = make(chan FakeGauge, 100)
-
 	BeforeEach(func() {
-		logger = lagertest.NewTestLogger("request-metrics")
+		metricsChan = make(chan metric, 100)
 		fakeMetronClient = new(mfakes.FakeIngressClient)
+		fakeMetronClient.SendMetricStub = func(name string, value int, opts ...loggregator.EmitGaugeOption) error {
+			metricsChan <- metric{name, value, opts}
+			return nil
+		}
+		fakeMetronClient.SendDurationStub = func(name string, value time.Duration, opts ...loggregator.EmitGaugeOption) error {
+			metricsChan <- metric{name, value, opts}
+			return nil
+		}
+
+		logger = lagertest.NewTestLogger("test")
 		fakeClock = fakeclock.NewFakeClock(time.Now())
 		metricsInterval = 10 * time.Second
-
-		fakeMetronClient.SendMetricStub = func(name string, value int) error {
-			defer GinkgoRecover()
-
-			Eventually(metricsChan).Should(BeSent(FakeGauge{name, value}))
-			return nil
-		}
-		fakeMetronClient.SendDurationStub = func(name string, value time.Duration) error {
-			defer GinkgoRecover()
-
-			Eventually(metricsChan).Should(BeSent(FakeGauge{name, int(value)}))
-			return nil
-		}
 	})
 
 	JustBeforeEach(func() {
@@ -67,51 +67,102 @@ var _ = Describe("RequestMetrics", func() {
 		ginkgomon.Interrupt(process)
 	})
 
-	Context("when there is traffic to the locket server", func() {
+	FContext("when there is traffic to the locket server", func() {
+		var requestType = "random-request"
 
 		JustBeforeEach(func() {
 			fakeClock.Increment(metricsInterval)
 		})
 
 		It("periodically emits the number of requests started", func() {
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestsStarted", 0})))
-			runner.IncrementRequestsStartedCounter(1)
+			runner.IncrementRequestsStartedCounter(requestType, 1)
 			fakeClock.Increment(metricsInterval)
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestsStarted", 1})))
+			Eventually(metricsChan).Should(Receive(gstruct.MatchAllFields(
+				gstruct.Fields{
+					"Name":  Equal("RequestsStarted"),
+					"Value": Equal(1),
+					"Opts":  haveTag("request-type", requestType),
+				},
+			)))
 		})
 
 		It("periodically emits the number of requests succeeded", func() {
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestsSucceeded", 0})))
-			runner.IncrementRequestsSucceededCounter(1)
+			runner.IncrementRequestsSucceededCounter(requestType, 1)
 			fakeClock.Increment(metricsInterval)
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestsSucceeded", 1})))
+			Eventually(metricsChan).Should(Receive(gstruct.MatchAllFields(
+				gstruct.Fields{
+					"Name":  Equal("RequestsSucceeded"),
+					"Value": Equal(1),
+					"Opts":  haveTag("request-type", requestType),
+				},
+			)))
 		})
 
 		It("periodically emits the number of requests failed", func() {
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestsFailed", 0})))
-			runner.IncrementRequestsFailedCounter(2)
+			runner.IncrementRequestsFailedCounter(requestType, 2)
 			fakeClock.Increment(metricsInterval)
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestsFailed", 2})))
+			Eventually(metricsChan).Should(Receive(gstruct.MatchAllFields(
+				gstruct.Fields{
+					"Name":  Equal("RequestsFailed"),
+					"Value": Equal(2),
+					"Opts":  haveTag("request-type", requestType),
+				},
+			)))
 		})
 
 		It("periodically emits the number of requests in flight", func() {
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestsInFlight", 0})))
-			runner.IncrementRequestsInFlightCounter(4)
+			runner.IncrementRequestsInFlightCounter(requestType, 4)
 			fakeClock.Increment(metricsInterval)
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestsInFlight", 4})))
+			Eventually(metricsChan).Should(Receive(gstruct.MatchAllFields(
+				gstruct.Fields{
+					"Name":  Equal("RequestsInFlight"),
+					"Value": Equal(4),
+					"Opts":  haveTag("request-type", requestType),
+				},
+			)))
 
-			runner.DecrementRequestsInFlightCounter(2)
+			runner.DecrementRequestsInFlightCounter(requestType, 2)
 			fakeClock.Increment(metricsInterval)
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestsInFlight", 2})))
+			Eventually(metricsChan).Should(Receive(gstruct.MatchAllFields(
+				gstruct.Fields{
+					"Name":  Equal("RequestsInFlight"),
+					"Value": Equal(2),
+					"Opts":  haveTag("request-type", requestType),
+				},
+			)))
 		})
 
 		It("periodically emits the max latency", func() {
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestLatencyMax", 0})))
-			runner.UpdateLatency(5 * time.Millisecond)
+			runner.UpdateLatency(requestType, 5*time.Millisecond)
 			fakeClock.Increment(metricsInterval)
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestLatencyMax", int(5 * time.Millisecond)})))
+			Eventually(metricsChan).Should(Receive(gstruct.MatchAllFields(
+				gstruct.Fields{
+					"Name":  Equal("RequestLatencyMax"),
+					"Value": Equal(5 * time.Millisecond),
+					"Opts":  haveTag("request-type", requestType),
+				},
+			)))
+
 			fakeClock.Increment(metricsInterval)
-			Eventually(metricsChan).Should(Receive(Equal(FakeGauge{"RequestLatencyMax", 0})))
+			Eventually(metricsChan).Should(Receive(gstruct.MatchAllFields(
+				gstruct.Fields{
+					"Name":  Equal("RequestLatencyMax"),
+					"Value": Equal(time.Duration(0)),
+					"Opts":  haveTag("request-type", requestType),
+				},
+			)))
 		})
 	})
 })
+
+func haveTag(name, value string) types.GomegaMatcher {
+	return WithTransform(func(opts []loggregator.EmitGaugeOption) map[string]string {
+		envelope := &loggregator_v2.Envelope{
+			Tags: make(map[string]string),
+		}
+		for _, opt := range opts {
+			opt(envelope)
+		}
+		return envelope.Tags
+	}, Equal(map[string]string{name: value}))
+}

@@ -3,11 +3,11 @@ package metrics
 import (
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"code.cloudfoundry.org/clock"
 	loggingclient "code.cloudfoundry.org/diego-logging-client"
+	loggregator "code.cloudfoundry.org/go-loggregator"
 	"code.cloudfoundry.org/lager"
 )
 
@@ -40,75 +40,115 @@ type RequestMetricsNotifier struct {
 	metricsInterval time.Duration
 	metronClient    loggingclient.IngressClient
 
-	requestsStarted   uint64
-	requestsSucceeded uint64
-	requestsFailed    uint64
-	requestsInFlight  uint64
-	latencyMax        time.Duration
-	latencyLock       *sync.Mutex
+	requestsStarted       map[string]uint64
+	requestsSucceeded     map[string]uint64
+	requestsFailed        map[string]uint64
+	requestsInFlight      map[string]uint64
+	latencyMax            map[string]time.Duration
+	latencyLock           *sync.Mutex
+	requestsStartedLock   *sync.Mutex
+	requestsSucceededLock *sync.Mutex
+	requestsFailedLock    *sync.Mutex
+	requestsInFlightLock  *sync.Mutex
 }
 
 func NewRequestMetricsNotifier(logger lager.Logger, ticker clock.Clock, metronClient loggingclient.IngressClient, metricsInterval time.Duration) *RequestMetricsNotifier {
 	return &RequestMetricsNotifier{
-		logger:          logger,
-		ticker:          ticker,
-		metricsInterval: metricsInterval,
-		metronClient:    metronClient,
-		latencyLock:     &sync.Mutex{},
+		logger:                logger,
+		ticker:                ticker,
+		metricsInterval:       metricsInterval,
+		metronClient:          metronClient,
+		latencyLock:           &sync.Mutex{},
+		requestsStartedLock:   &sync.Mutex{},
+		requestsSucceededLock: &sync.Mutex{},
+		requestsFailedLock:    &sync.Mutex{},
+		requestsInFlightLock:  &sync.Mutex{},
+		requestsStarted:       map[string]uint64{},
+		requestsSucceeded:     map[string]uint64{},
+		requestsFailed:        map[string]uint64{},
+		requestsInFlight:      map[string]uint64{},
+		latencyMax:            map[string]time.Duration{},
 	}
 }
 
-func (notifier *RequestMetricsNotifier) IncrementRequestsStartedCounter(delta int) {
-	atomic.AddUint64(&notifier.requestsStarted, uint64(delta))
+func (notifier *RequestMetricsNotifier) IncrementRequestsStartedCounter(requestType string, delta int) {
+	notifier.requestsStartedLock.Lock()
+	defer notifier.requestsStartedLock.Unlock()
+
+	notifier.requestsStarted[requestType] += uint64(delta)
 }
 
-func (notifier *RequestMetricsNotifier) IncrementRequestsSucceededCounter(delta int) {
-	atomic.AddUint64(&notifier.requestsSucceeded, uint64(delta))
+func (notifier *RequestMetricsNotifier) IncrementRequestsSucceededCounter(requestType string, delta int) {
+	notifier.requestsSucceededLock.Lock()
+	defer notifier.requestsSucceededLock.Unlock()
+
+	notifier.requestsSucceeded[requestType] += uint64(delta)
 }
 
-func (notifier *RequestMetricsNotifier) IncrementRequestsFailedCounter(delta int) {
-	atomic.AddUint64(&notifier.requestsFailed, uint64(delta))
+func (notifier *RequestMetricsNotifier) IncrementRequestsFailedCounter(requestType string, delta int) {
+	notifier.requestsFailedLock.Lock()
+	defer notifier.requestsFailedLock.Unlock()
+
+	notifier.requestsFailed[requestType] += uint64(delta)
 }
 
-func (notifier *RequestMetricsNotifier) IncrementRequestsInFlightCounter(delta int) {
-	atomic.AddUint64(&notifier.requestsInFlight, uint64(delta))
+func (notifier *RequestMetricsNotifier) IncrementRequestsInFlightCounter(requestType string, delta int) {
+	notifier.requestsInFlightLock.Lock()
+	defer notifier.requestsInFlightLock.Unlock()
+
+	notifier.requestsInFlight[requestType] += uint64(delta)
 }
 
-func (notifier *RequestMetricsNotifier) DecrementRequestsInFlightCounter(delta int) {
-	atomic.AddUint64(&notifier.requestsInFlight, ^uint64(delta-1))
-}
-
-func (notifier *RequestMetricsNotifier) UpdateLatency(dur time.Duration) {
+func (notifier *RequestMetricsNotifier) DecrementRequestsInFlightCounter(requestType string, delta int) {
 	notifier.latencyLock.Lock()
 	defer notifier.latencyLock.Unlock()
 
-	if dur > notifier.latencyMax {
-		notifier.latencyMax = dur
+	notifier.requestsInFlight[requestType] -= uint64(delta)
+}
+
+func (notifier *RequestMetricsNotifier) UpdateLatency(requestType string, dur time.Duration) {
+	notifier.latencyLock.Lock()
+	defer notifier.latencyLock.Unlock()
+
+	if dur > notifier.latencyMax[requestType] {
+		notifier.latencyMax[requestType] = dur
 	}
 }
 
-func (notifier *RequestMetricsNotifier) getRequestsStarted() uint64 {
-	return atomic.LoadUint64(&notifier.requestsStarted)
+func (notifier *RequestMetricsNotifier) getRequestsStarted(requestType string) uint64 {
+	notifier.requestsStartedLock.Lock()
+	defer notifier.requestsStartedLock.Unlock()
+
+	return notifier.requestsStarted[requestType]
 }
 
-func (notifier *RequestMetricsNotifier) getRequestsSucceeded() uint64 {
-	return atomic.LoadUint64(&notifier.requestsSucceeded)
+func (notifier *RequestMetricsNotifier) getRequestsSucceeded(requestType string) uint64 {
+	notifier.requestsSucceededLock.Lock()
+	defer notifier.requestsSucceededLock.Unlock()
+
+	return notifier.requestsSucceeded[requestType]
 }
 
-func (notifier *RequestMetricsNotifier) getRequestsFailed() uint64 {
-	return atomic.LoadUint64(&notifier.requestsFailed)
+func (notifier *RequestMetricsNotifier) getRequestsFailed(requestType string) uint64 {
+	notifier.requestsFailedLock.Lock()
+	defer notifier.requestsFailedLock.Unlock()
+
+	return notifier.requestsFailed[requestType]
 }
 
-func (notifier *RequestMetricsNotifier) GetRequestsInFlight() uint64 {
-	return atomic.LoadUint64(&notifier.requestsInFlight)
+func (notifier *RequestMetricsNotifier) getRequestsInFlight(requestType string) uint64 {
+	notifier.requestsInFlightLock.Lock()
+	defer notifier.requestsInFlightLock.Unlock()
+
+	return notifier.requestsInFlight[requestType]
 }
 
-func (notifier *RequestMetricsNotifier) readAndResetMaxLatency() time.Duration {
+func (notifier *RequestMetricsNotifier) readAndResetMaxLatency(requestType string) time.Duration {
 	notifier.latencyLock.Lock()
 	defer notifier.latencyLock.Unlock()
 
-	max := notifier.latencyMax
-	notifier.latencyMax = 0
+	max := notifier.latencyMax[requestType]
+	notifier.latencyMax[requestType] = 0
 
 	return max
 }
@@ -128,30 +168,50 @@ func (notifier *RequestMetricsNotifier) Run(signals <-chan os.Signal, ready chan
 		case <-tick.C():
 			logger.Debug("emitting-metrics")
 
-			err := notifier.metronClient.SendMetric(requestsStartedMetric, int(notifier.getRequestsStarted()))
-			if err != nil {
-				logger.Error("failed-to-emit-requests-started-metric", err)
+			var err error
+			for requestType, _ := range notifier.requestsStarted {
+				opt := loggregator.WithEnvelopeTag("request-type", requestType)
+				value := notifier.getRequestsStarted(requestType)
+				err = notifier.metronClient.SendMetric(requestsStartedMetric, int(value), opt)
+				if err != nil {
+					logger.Error("failed-to-emit-requests-started-metric", err)
+				}
 			}
 
-			err = notifier.metronClient.SendMetric(requestsSucceededMetric, int(notifier.getRequestsSucceeded()))
-			if err != nil {
-				logger.Error("failed-to-emit-requests-succeeded-metric", err)
+			for requestType, _ := range notifier.requestsSucceeded {
+				opt := loggregator.WithEnvelopeTag("request-type", requestType)
+				value := notifier.getRequestsSucceeded(requestType)
+				err = notifier.metronClient.SendMetric(requestsSucceededMetric, int(value), opt)
+				if err != nil {
+					logger.Error("failed-to-emit-requests-succeeded-metric", err)
+				}
 			}
 
-			err = notifier.metronClient.SendMetric(requestsFailedMetric, int(notifier.getRequestsFailed()))
-			if err != nil {
-				logger.Error("failed-to-emit-requests-failed-metric", err)
+			for requestType, _ := range notifier.requestsFailed {
+				opt := loggregator.WithEnvelopeTag("request-type", requestType)
+				value := notifier.getRequestsFailed(requestType)
+				err = notifier.metronClient.SendMetric(requestsFailedMetric, int(value), opt)
+				if err != nil {
+					logger.Error("failed-to-emit-requests-failed-metric", err)
+				}
 			}
 
-			err = notifier.metronClient.SendMetric(requestsInFlightMetric, int(notifier.GetRequestsInFlight()))
-			if err != nil {
-				logger.Error("failed-to-emit-requests-in-flight-metric", err)
+			for requestType, _ := range notifier.requestsInFlight {
+				opt := loggregator.WithEnvelopeTag("request-type", requestType)
+				value := notifier.getRequestsInFlight(requestType)
+				err = notifier.metronClient.SendMetric(requestsInFlightMetric, int(value), opt)
+				if err != nil {
+					logger.Error("failed-to-emit-requests-in-flight-metric", err)
+				}
 			}
 
-			max := notifier.readAndResetMaxLatency()
-			err = notifier.metronClient.SendDuration(requestLatencyMaxDuration, max)
-			if err != nil {
-				logger.Error("failed-to-emit-requests-latency-max-metric", err)
+			for requestType, _ := range notifier.latencyMax {
+				opt := loggregator.WithEnvelopeTag("request-type", requestType)
+				max := notifier.readAndResetMaxLatency(requestType)
+				err = notifier.metronClient.SendDuration(requestLatencyMaxDuration, max, opt)
+				if err != nil {
+					logger.Error("failed-to-emit-requests-latency-max-metric", err)
+				}
 			}
 		}
 	}
